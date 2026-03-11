@@ -63,7 +63,8 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
 
   // Refs to track polling state without triggering re-renders
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingWarningTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingHardTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isPollingRef = useRef(false);
   const lastSubmissionRef = useRef<{ answer: string; otherText?: string } | null>(null);
   const currentQuestionRef = useRef<string | undefined>(undefined);
@@ -94,9 +95,13 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
       clearInterval(pollingIntervalRef.current);
       pollingIntervalRef.current = null;
     }
-    if (pollingTimeoutRef.current) {
-      clearTimeout(pollingTimeoutRef.current);
-      pollingTimeoutRef.current = null;
+    if (pollingWarningTimeoutRef.current) {
+      clearTimeout(pollingWarningTimeoutRef.current);
+      pollingWarningTimeoutRef.current = null;
+    }
+    if (pollingHardTimeoutRef.current) {
+      clearTimeout(pollingHardTimeoutRef.current);
+      pollingHardTimeoutRef.current = null;
     }
     setIsWaitingForResponse(false);
   }, []);
@@ -112,6 +117,9 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
         const data = await res.json();
 
         if (data.hasUpdates) {
+          // Clear any stale waiting warnings once updates are flowing
+          setError(null);
+
           const newQuestion = data.currentQuestion?.question;
           const questionChanged = newQuestion && currentQuestionRef.current !== newQuestion;
 
@@ -170,21 +178,26 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
   // Start polling when waiting for response
   const startPolling = useCallback(() => {
     stopPolling();
+    setError(null);
     setIsWaitingForResponse(true);
 
-    // Poll every 2 seconds - need faster feedback for planning UX
-    // Planning is typically short-lived, so this is acceptable
+    // Poll every 2 seconds for responsive UX
     pollingIntervalRef.current = setInterval(() => {
       pollForUpdates();
     }, 2000);
 
-    // Set a 90-second timeout - Opus can take a while to respond
-    pollingTimeoutRef.current = setTimeout(() => {
+    // Soft warning at 90s, but keep polling so long responses can still complete
+    pollingWarningTimeoutRef.current = setTimeout(() => {
+      setError('The orchestrator is still processing. You can refresh safely — you will not lose your place in Planning Mode.');
+    }, 90000);
+
+    // Hard timeout at 5 minutes to avoid infinite wait states
+    pollingHardTimeoutRef.current = setTimeout(() => {
       stopPolling();
       setSubmitting(false);
       setIsSubmittingAnswer(false);
-      setError('The orchestrator is taking too long to respond. Please try submitting again or refresh the page.');
-    }, 90000);
+      setError('The orchestrator timed out after an extended wait. Please refresh the page and retry your last answer.');
+    }, 300000);
   }, [pollForUpdates, stopPolling]);
 
   // Update currentQuestion ref when state changes
@@ -614,16 +627,32 @@ export function PlanningTab({ taskId, onSpecLocked }: PlanningTabProps) {
             </div>
 
             {error && (
-              <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+              <div
+                className={`mt-4 p-3 border rounded-lg ${
+                  error.includes('still processing')
+                    ? 'bg-orange-500/10 border-orange-500/40'
+                    : 'bg-red-500/10 border-red-500/30'
+                }`}
+              >
                 <div className="flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+                  <AlertCircle
+                    className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                      error.includes('still processing') ? 'text-orange-300' : 'text-red-400'
+                    }`}
+                  />
                   <div className="flex-1">
-                    <p className="text-red-400 text-sm">{error}</p>
+                    <p className={`text-sm ${error.includes('still processing') ? 'text-orange-200' : 'text-red-400'}`}>
+                      {error}
+                    </p>
                     {!isWaitingForResponse && lastSubmissionRef.current && (
                       <button
                         onClick={handleRetry}
                         disabled={submitting}
-                        className="mt-2 text-xs text-red-400 hover:text-red-300 underline disabled:opacity-50"
+                        className={`mt-2 text-xs underline disabled:opacity-50 ${
+                          error.includes('still processing')
+                            ? 'text-orange-300 hover:text-orange-200'
+                            : 'text-red-400 hover:text-red-300'
+                        }`}
                       >
                         {submitting ? 'Retrying...' : 'Retry'}
                       </button>

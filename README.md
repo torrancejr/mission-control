@@ -1,8 +1,9 @@
-<p align="center">
-  <img src="mission-control.png" alt="Mission Control" width="600" />
-</p>
+<h1 align="center">Autensa</h1>
 
-<h1 align="center">🦞 Mission Control</h1>
+<p align="center">
+  <em>Formerly known as Mission Control</em><br>
+  <a href="https://autensa.com">autensa.com</a>
+</p>
 
 <p align="center">
   <strong>AI Agent Orchestration Dashboard</strong><br>
@@ -10,11 +11,13 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.2.0-blue?style=flat-square" alt="Version" />
+  <img src="https://img.shields.io/github/stars/crshdn/mission-control?style=flat-square" alt="GitHub Stars" />
+  <img src="https://img.shields.io/github/issues/crshdn/mission-control?style=flat-square" alt="GitHub Issues" />
+  <img src="https://img.shields.io/github/license/crshdn/mission-control?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/PRs-welcome-brightgreen?style=flat-square" alt="PRs Welcome" />
   <img src="https://img.shields.io/badge/Next.js-14-black?style=flat-square&logo=next.js" alt="Next.js" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
   <img src="https://img.shields.io/badge/SQLite-3-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite" />
-  <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="MIT License" />
 </p>
 
 <p align="center">
@@ -27,8 +30,24 @@
   <a href="#-contributors">Contributors</a>
 </p>
 
+<p align="center">
+
+https://github.com/user-attachments/assets/76af060c-fdb1-40cb-b575-46c7a807845d
+
+</p>
+
 ---
 
+## 🆕 What's New in v1.5.0
+
+- **Task Image Attachments** — Upload reference images to tasks. AI agents see them during dispatch — perfect for UI mockups, screenshots, and visual specs.
+- **PORT env var support** — Set `PORT` in `.env.local` and it actually works now.
+- **Webhook auth fix** — Split-service deployments no longer have completion callbacks blocked by API token middleware.
+- **Agent status fix** — Agents correctly show standby when idle instead of stuck on "Working".
+
+See the full [CHANGELOG](CHANGELOG.md) for details.
+
+---
 ## ✨ Features
 
 🎯 **Task Management** — Kanban board with drag-and-drop across 7 status columns
@@ -45,9 +64,19 @@
 
 🔒 **Security First** — Bearer token auth, HMAC webhooks, Zod validation, path traversal protection, security headers
 
+🛡️ **Privacy First** — No built-in analytics trackers or centralized user-data collection; data stays in your deployment by default
+
 📡 **Live Feed** — Real-time event stream showing agent activity, task updates, and system events
 
 🌐 **Multi-Machine** — Run the dashboard and AI agents on different computers (supports Tailscale for remote)
+
+---
+
+## 🛡️ Privacy
+
+Mission Control is open-source and self-hosted. The project does **not** include ad trackers, third-party analytics beacons, or a centralized data collector run by us.
+
+By default, your task/project data stays in your own deployment (SQLite + workspace). If you connect external services (for example AI providers or remote gateways), only the data you explicitly send to those services leaves your environment and is governed by their policies.
 
 ---
 
@@ -94,7 +123,7 @@ cd mission-control
 # Install dependencies
 npm install
 
-# Configure
+# Setup
 cp .env.example .env.local
 ```
 
@@ -320,30 +349,43 @@ mission-control/
 
 ## 🔧 Troubleshooting
 
-<details>
-<summary><strong>Can't connect to OpenClaw Gateway</strong></summary>
+### Can't connect to OpenClaw Gateway
 
 1. Check OpenClaw is running: `openclaw gateway status`
 2. Verify URL and token in `.env.local`
 3. Check firewall isn't blocking port 18789
-</details>
 
-<details>
-<summary><strong>Planning questions not loading</strong></summary>
+### Planning questions not loading
 
 1. Check OpenClaw logs: `openclaw gateway logs`
 2. Verify your AI API key is valid
 3. Refresh and click the task again
-</details>
 
-<details>
-<summary><strong>Port 4000 already in use</strong></summary>
+### Port 4000 already in use
 
 ```bash
 lsof -i :4000
 kill -9 <PID>
 ```
-</details>
+
+### Agent callbacks failing behind a proxy (502 errors)
+
+If you're behind an HTTP proxy (corporate VPN, Hiddify, etc.), agent callbacks to `localhost` may fail because the proxy intercepts local requests.
+
+**Fix:** Set `NO_PROXY` so localhost bypasses the proxy:
+
+```bash
+# Linux / macOS
+export NO_PROXY=localhost,127.0.0.1
+
+# Windows (cmd)
+set NO_PROXY=localhost,127.0.0.1
+
+# Docker
+docker run -e NO_PROXY=localhost,127.0.0.1 ...
+```
+
+See [Issue #30](https://github.com/crshdn/mission-control/issues/30) for details.
 
 ---
 
@@ -452,6 +494,126 @@ Mission Control is built by a growing community. Thank you to everyone who has c
       <sub>Agent Protocol Docs</sub>
     </td>
   </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/JamesCao2048">
+        <img src="https://github.com/JamesCao2048.png?size=80" width="80" height="80" style="border-radius:50%" alt="JamesCao2048" /><br />
+        <sub><b>JamesCao2048</b></sub>
+      </a><br />
+      <sub>Task Creation Fix</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/davetha">
+        <img src="https://github.com/davetha.png?size=80" width="80" height="80" style="border-radius:50%" alt="davetha" /><br />
+        <sub><b>davetha</b></sub>
+      </a><br />
+      <sub>Force-Dynamic & Model Discovery</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/pkgaiassistant-droid">
+        <img src="https://github.com/pkgaiassistant-droid.png?size=80" width="80" height="80" style="border-radius:50%" alt="pkgaiassistant-droid" /><br />
+        <sub><b>pkgaiassistant-droid</b></sub>
+      </a><br />
+      <sub>Activity Dashboard & Mobile UX</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Coder-maxer">
+        <img src="https://github.com/Coder-maxer.png?size=80" width="80" height="80" style="border-radius:50%" alt="Coder-maxer" /><br />
+        <sub><b>Coder-maxer</b></sub>
+      </a><br />
+      <sub>Static Route Fix</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/grunya-openclaw">
+        <img src="https://github.com/grunya-openclaw.png?size=80" width="80" height="80" style="border-radius:50%" alt="grunya-openclaw" /><br />
+        <sub><b>grunya-openclaw</b></sub>
+      </a><br />
+      <sub>Dispatch & Proxy Bug Reports</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/ilakskill">
+        <img src="https://github.com/ilakskill.png?size=80" width="80" height="80" style="border-radius:50%" alt="ilakskill" /><br />
+        <sub><b>ilakskill</b></sub>
+      </a><br />
+      <sub>Dispatch Recovery Design</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/plutusaisystem-cmyk">
+        <img src="https://github.com/plutusaisystem-cmyk.png?size=80" width="80" height="80" style="border-radius:50%" alt="plutusaisystem-cmyk" /><br />
+        <sub><b>plutusaisystem-cmyk</b></sub>
+      </a><br />
+      <sub>Agent Daemon & Fleet View</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/nithis4th">
+        <img src="https://github.com/nithis4th.png?size=80" width="80" height="80" style="border-radius:50%" alt="nithis4th" /><br />
+        <sub><b>nithis4th</b></sub>
+      </a><br />
+      <sub>2nd Brain Knowledge Base</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/davidpellerin">
+        <img src="https://github.com/davidpellerin.png?size=80" width="80" height="80" style="border-radius:50%" alt="davidpellerin" /><br />
+        <sub><b>davidpellerin</b></sub>
+      </a><br />
+      <sub>Dynamic Agent Config</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/tmchow">
+        <img src="https://github.com/tmchow.png?size=80" width="80" height="80" style="border-radius:50%" alt="tmchow" /><br />
+        <sub><b>tmchow</b></sub>
+      </a><br />
+      <sub>Agent Import Improvements</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/xiaomiusa87">
+        <img src="https://github.com/xiaomiusa87.png?size=80" width="80" height="80" style="border-radius:50%" alt="xiaomiusa87" /><br />
+        <sub><b>xiaomiusa87</b></sub>
+      </a><br />
+      <sub>Session Key Bug Report</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/lutherbot-ai">
+        <img src="https://github.com/lutherbot-ai.png?size=80" width="80" height="80" style="border-radius:50%" alt="lutherbot-ai" /><br />
+        <sub><b>lutherbot-ai</b></sub>
+      </a><br />
+      <sub>Security Audit</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/YitingOU">
+        <img src="https://github.com/YitingOU.png?size=80" width="80" height="80" style="border-radius:50%" alt="YITING OU" /><br />
+        <sub><b>YITING OU</b></sub>
+      </a><br />
+      <sub>Cascade Delete Fix</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/brandonros">
+        <img src="https://github.com/brandonros.png?size=80" width="80" height="80" style="border-radius:50%" alt="Brandon Ros" /><br />
+        <sub><b>Brandon Ros</b></sub>
+      </a><br />
+      <sub>Docker CI Workflow</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/nano-lgtm">
+        <img src="https://github.com/nano-lgtm.png?size=80" width="80" height="80" style="border-radius:50%" alt="nano-lgtm" /><br />
+        <sub><b>nano-lgtm</b></sub>
+      </a><br />
+      <sub>Kanban UX Improvements</sub>
+    </td>
+    <td align="center">
+      <a href="https://github.com/cammybot1313-collab">
+        <img src="https://github.com/cammybot1313-collab.png?size=80" width="80" height="80" style="border-radius:50%" alt="cammybot1313-collab" /><br />
+        <sub><b>cammybot1313-collab</b></sub>
+      </a><br />
+      <sub>Docs Typo Fix</sub>
+    </td>
+  </tr>
 </table>
 
 ---
@@ -476,9 +638,11 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 ## 🙏 Acknowledgments
 
-- Powered by [OpenClaw](https://github.com/openclaw/openclaw) — the AI agent runtime
-- Built with [Next.js](https://nextjs.org/), [Tailwind CSS](https://tailwindcss.com/), and [SQLite](https://www.sqlite.org/)
-- AI by [Anthropic](https://anthropic.com/), [OpenAI](https://openai.com/), and others
+[![OpenClaw](https://img.shields.io/badge/OpenClaw-Gateway-blue?style=for-the-badge)](https://github.com/open-claw/open-claw-gateway)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+[![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![Anthropic](https://img.shields.io/badge/Anthropic-Claude-orange?style=for-the-badge)](https://www.anthropic.com/)
 
 ---
 

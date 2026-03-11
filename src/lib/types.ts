@@ -2,7 +2,7 @@
 
 export type AgentStatus = 'standby' | 'working' | 'offline';
 
-export type TaskStatus = 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'testing' | 'review' | 'done';
+export type TaskStatus = 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'testing' | 'review' | 'verification' | 'done';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -37,6 +37,7 @@ export interface Agent {
   model?: string;
   source: AgentSource;
   gateway_agent_id?: string;
+  session_key_prefix?: string;
   created_at: string;
   updated_at: string;
 }
@@ -64,11 +65,24 @@ export interface Task {
   workspace_id: string;
   business_id: string;
   due_date?: string;
+  workflow_template_id?: string;
+  status_reason?: string;
+  // Planning/dispatch metadata (optional fields from tasks table)
+  planning_complete?: number;
+  planning_dispatch_error?: string;
+  planning_session_key?: string;
+  images?: string; // JSON array of TaskImage objects
   created_at: string;
   updated_at: string;
   // Joined fields
   assigned_agent?: Agent;
   created_by_agent?: Agent;
+}
+
+export interface TaskImage {
+  filename: string;
+  original_name: string;
+  uploaded_at: string;
 }
 
 export interface Conversation {
@@ -131,16 +145,61 @@ export interface WorkspaceStats {
   slug: string;
   icon: string;
   taskCounts: {
+    pending_dispatch: number;
     planning: number;
     inbox: number;
     assigned: number;
     in_progress: number;
     testing: number;
     review: number;
+    verification: number;
     done: number;
     total: number;
   };
   agentCount: number;
+}
+
+// Workflow template types
+export interface WorkflowStage {
+  id: string;
+  label: string;
+  role: string | null;
+  status: TaskStatus;
+}
+
+export interface WorkflowTemplate {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description?: string;
+  stages: WorkflowStage[];
+  fail_targets: Record<string, string>;
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskRole {
+  id: string;
+  task_id: string;
+  role: string;
+  agent_id: string;
+  created_at: string;
+  // Joined fields
+  agent?: Agent;
+}
+
+export interface KnowledgeEntry {
+  id: string;
+  workspace_id: string;
+  task_id?: string;
+  category: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  confidence: number;
+  created_by_agent_id?: string;
+  created_at: string;
 }
 
 export interface OpenClawSession {

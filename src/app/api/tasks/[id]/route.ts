@@ -3,8 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, run, queryAll } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { getMissionControlUrl } from '@/lib/config';
+import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
+import { notifyLearner } from '@/lib/learner';
 import { UpdateTaskSchema } from '@/lib/validation';
 import type { Task, UpdateTaskRequest, Agent, TaskDeliverable } from '@/lib/types';
+
+export const dynamic = 'force-dynamic';
 
 // GET /api/tasks/[id] - Get a single task
 export async function GET(
@@ -53,6 +57,7 @@ export async function PATCH(
     }
 
     const validatedData = validation.data;
+    let nextStatus = validatedData.status;
 
     const existing = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [id]);
     if (!existing) {
@@ -96,26 +101,71 @@ export async function PATCH(
       updates.push('due_date = ?');
       values.push(validatedData.due_date);
     }
+    if (validatedData.workflow_template_id !== undefined) {
+      updates.push('workflow_template_id = ?');
+      values.push(validatedData.workflow_template_id);
+    }
 
     // Track if we need to dispatch task
     let shouldDispatch = false;
+    let shouldDispatchWorkflowStage = false;
+
+    const effectiveAssignedAgentId =
+      validatedData.assigned_agent_id !== undefined
+        ? validatedData.assigned_agent_id
+        : existing.assigned_agent_id;
+
+    const readinessIssues: string[] = [];
+    if (!effectiveAssignedAgentId) readinessIssues.push('No agent assigned');
+
+    // If task came from planning mode, require planning to be complete before auto-start
+    const planningComplete = Number((existing as any).planning_complete || 0) === 1;
+    if (existing.status === 'planning' && !planningComplete) {
+      readinessIssues.push('Planning not complete');
+    }
+
+    // Auto-assign default workflow template if task has none
+    if (!existing.workflow_template_id && validatedData.assigned_agent_id) {
+      const defaultTpl = queryOne<{ id: string }>(
+        'SELECT id FROM workflow_templates WHERE workspace_id = ? AND is_default = 1 LIMIT 1',
+        [existing.workspace_id]
+      );
+      if (defaultTpl) {
+        updates.push('workflow_template_id = ?');
+        values.push(defaultTpl.id);
+        // Also populate task_roles now that we have a template
+        run('UPDATE tasks SET workflow_template_id = ? WHERE id = ?', [defaultTpl.id, id]);
+        populateTaskRolesFromAgents(id, existing.workspace_id);
+      }
+    }
+
+    // Auto-promote INBOX -> ASSIGNED when an agent is assigned while task is still in inbox.
+    // TaskModal always sends status, so handle both undefined and explicit inbox.
+    if (
+      (nextStatus === undefined || nextStatus === 'inbox') &&
+      validatedData.assigned_agent_id !== undefined &&
+      validatedData.assigned_agent_id &&
+      existing.status === 'inbox'
+    ) {
+      nextStatus = 'assigned';
+    }
 
     // Handle status change
-    if (validatedData.status !== undefined && validatedData.status !== existing.status) {
+    if (nextStatus !== undefined && nextStatus !== existing.status) {
       updates.push('status = ?');
-      values.push(validatedData.status);
+      values.push(nextStatus);
 
-      // Auto-dispatch when moving to assigned
-      if (validatedData.status === 'assigned' && existing.assigned_agent_id) {
+      // Auto-dispatch when moving to assigned (if we have a valid assignee)
+      if (nextStatus === 'assigned' && effectiveAssignedAgentId) {
         shouldDispatch = true;
       }
 
       // Log status change event
-      const eventType = validatedData.status === 'done' ? 'task_completed' : 'task_status_changed';
+      const eventType = nextStatus === 'done' ? 'task_completed' : 'task_status_changed';
       run(
         `INSERT INTO events (id, type, task_id, message, created_at)
          VALUES (?, ?, ?, ?, ?)`,
-        [uuidv4(), eventType, id, `Task "${existing.title}" moved to ${validatedData.status}`, now]
+        [uuidv4(), eventType, id, `Task "${existing.title}" moved to ${nextStatus}`, now]
       );
     }
 
@@ -134,8 +184,11 @@ export async function PATCH(
           );
 
           // Auto-dispatch if already in assigned status or being assigned now
-          if (existing.status === 'assigned' || validatedData.status === 'assigned') {
+          if (existing.status === 'assigned' || nextStatus === 'assigned') {
             shouldDispatch = true;
+          } else if (['testing', 'review', 'verification'].includes(nextStatus || existing.status)) {
+            // Agent manually assigned to a task in a workflow stage — dispatch directly
+            shouldDispatchWorkflowStage = true;
           }
         }
       }
@@ -143,6 +196,15 @@ export async function PATCH(
 
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No updates provided' }, { status: 400 });
+    }
+
+    // Persist readiness warning for assigned tasks if validation fails
+    if (nextStatus === 'assigned' && readinessIssues.length > 0) {
+      updates.push('planning_dispatch_error = ?');
+      values.push(`Validation: ${readinessIssues.join(', ')}`);
+      shouldDispatch = false;
+    } else if (nextStatus === 'assigned') {
+      updates.push('planning_dispatch_error = NULL');
     }
 
     updates.push('updated_at = ?');
@@ -173,16 +235,152 @@ export async function PATCH(
       });
     }
 
-    // Trigger auto-dispatch if needed
-    if (shouldDispatch) {
-      // Call dispatch endpoint asynchronously (don't wait for response)
-      const missionControlUrl = getMissionControlUrl();
-      fetch(`${missionControlUrl}/api/tasks/${id}/dispatch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      }).catch(err => {
-        console.error('Auto-dispatch failed:', err);
+    // Trigger workflow-aware dispatch if needed
+    if (shouldDispatch && readinessIssues.length === 0) {
+      // Try the workflow engine first — it handles role-based handoffs
+      const workflowResult = await handleStageTransition(id, nextStatus || 'assigned', {
+        previousStatus: existing.status,
       });
+
+      if (!workflowResult.handedOff) {
+        // No workflow template or no role for this stage — fall back to legacy dispatch
+        const missionControlUrl = getMissionControlUrl();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (process.env.MC_API_TOKEN) {
+          headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
+        }
+
+        try {
+          const dispatchRes = await fetch(`${missionControlUrl}/api/tasks/${id}/dispatch`, {
+            method: 'POST',
+            headers,
+          });
+
+          if (!dispatchRes.ok) {
+            const errorText = await dispatchRes.text();
+            const dispatchError = `Auto-dispatch failed (${dispatchRes.status}): ${errorText}`;
+            console.error(dispatchError);
+            run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [dispatchError, now, id]);
+          }
+        } catch (err) {
+          const dispatchError = `Auto-dispatch error: ${(err as Error).message}`;
+          console.error(dispatchError);
+          run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [dispatchError, now, id]);
+        }
+      }
+    }
+
+    // Trigger workflow handoff for forward stage transitions (testing, review, verification)
+    // This is separate from the shouldDispatch block above which handles 'assigned' status
+    const workflowStages = ['testing', 'review', 'verification'];
+    if (
+      nextStatus &&
+      nextStatus !== existing.status &&
+      workflowStages.includes(nextStatus) &&
+      !shouldDispatch // Don't double-trigger if already handled above
+    ) {
+      const stageResult = await handleStageTransition(id, nextStatus, {
+        previousStatus: existing.status,
+      });
+
+      if (stageResult.handedOff) {
+        console.log(`[PATCH] Workflow handoff: ${existing.status} → ${nextStatus} → agent ${stageResult.newAgentName}`);
+        // Re-fetch task to include updated agent assignment
+        const refreshed = queryOne<Task>(
+          `SELECT t.*, aa.name as assigned_agent_name, aa.avatar_emoji as assigned_agent_emoji
+           FROM tasks t LEFT JOIN agents aa ON t.assigned_agent_id = aa.id WHERE t.id = ?`,
+          [id]
+        );
+        if (refreshed) broadcast({ type: 'task_updated', payload: refreshed });
+      } else if (!stageResult.success && stageResult.error) {
+        console.warn(`[PATCH] Workflow handoff blocked: ${stageResult.error}`);
+        // Broadcast so the UI picks up the dispatch error banner
+        const refreshed = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [id]);
+        if (refreshed) broadcast({ type: 'task_updated', payload: refreshed });
+      }
+    }
+
+    // Agent manually assigned to a task already in a workflow stage — dispatch directly
+    if (shouldDispatchWorkflowStage && effectiveAssignedAgentId) {
+      const currentStatus = nextStatus || existing.status;
+      console.log(`[PATCH] Agent assigned in workflow stage "${currentStatus}" — dispatching`);
+      // Clear any previous dispatch error
+      run('UPDATE tasks SET planning_dispatch_error = NULL, updated_at = ? WHERE id = ?', [now, id]);
+
+      const missionControlUrl = getMissionControlUrl();
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (process.env.MC_API_TOKEN) {
+        headers['Authorization'] = `Bearer ${process.env.MC_API_TOKEN}`;
+      }
+      try {
+        const dispatchRes = await fetch(`${missionControlUrl}/api/tasks/${id}/dispatch`, {
+          method: 'POST',
+          headers,
+        });
+        if (!dispatchRes.ok) {
+          const errorText = await dispatchRes.text();
+          console.error(`[PATCH] Workflow stage dispatch failed: ${errorText}`);
+          run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [`Dispatch failed (${dispatchRes.status}): ${errorText}`, now, id]);
+        }
+      } catch (err) {
+        console.error('[PATCH] Workflow stage dispatch error:', err);
+        run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [`Dispatch error: ${(err as Error).message}`, now, id]);
+      }
+      // Re-broadcast with latest state
+      const refreshed = queryOne<Task>(
+        `SELECT t.*, aa.name as assigned_agent_name, aa.avatar_emoji as assigned_agent_emoji
+         FROM tasks t LEFT JOIN agents aa ON t.assigned_agent_id = aa.id WHERE t.id = ?`,
+        [id]
+      );
+      if (refreshed) broadcast({ type: 'task_updated', payload: refreshed });
+    }
+
+    // Reset agent status to standby when they have no more active tasks
+    if (nextStatus && nextStatus !== existing.status) {
+      // When a task moves to done, or transitions away from the current agent
+      const agentToCheck = existing.assigned_agent_id;
+      if (agentToCheck) {
+        // Check if this agent still has any active (working) tasks
+        const activeTasks = queryOne<{ count: number }>(
+          `SELECT COUNT(*) as count FROM tasks
+           WHERE assigned_agent_id = ?
+             AND status IN ('assigned', 'in_progress', 'testing', 'verification')
+             AND id != ?`,
+          [agentToCheck, id]
+        );
+        // Also check if the current task is still actively assigned to this agent
+        const currentTaskStillActive = (
+          validatedData.assigned_agent_id !== undefined
+            ? validatedData.assigned_agent_id === agentToCheck
+            : true
+        ) && ['assigned', 'in_progress', 'testing', 'verification'].includes(nextStatus);
+
+        if (!currentTaskStillActive && (!activeTasks || activeTasks.count === 0)) {
+          run(
+            'UPDATE agents SET status = ?, updated_at = ? WHERE id = ? AND status = ?',
+            ['standby', now, agentToCheck, 'working']
+          );
+        }
+      }
+    }
+
+    // Notify learner on stage transitions (non-blocking)
+    if (nextStatus && nextStatus !== existing.status) {
+      const isForwardMove = !['inbox', 'assigned', 'planning', 'pending_dispatch'].includes(nextStatus);
+      if (isForwardMove) {
+        notifyLearner(id, {
+          previousStatus: existing.status,
+          newStatus: nextStatus,
+          passed: true,
+        }).catch(err => console.error('[Learner] notification failed:', err));
+      }
+    }
+
+    // Drain the review queue when a task reaches 'done' (frees the verification slot)
+    if (nextStatus === 'done') {
+      drainQueue(id, existing.workspace_id).catch(err =>
+        console.error('[Workflow] drainQueue after done failed:', err)
+      );
     }
 
     return NextResponse.json(task);
@@ -203,6 +401,23 @@ export async function DELETE(
 
     if (!existing) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    // Reset agent status if this was their only active task
+    if (existing.assigned_agent_id) {
+      const otherActive = queryOne<{ count: number }>(
+        `SELECT COUNT(*) as count FROM tasks
+         WHERE assigned_agent_id = ?
+           AND status IN ('assigned', 'in_progress', 'testing', 'verification')
+           AND id != ?`,
+        [existing.assigned_agent_id, id]
+      );
+      if (!otherActive || otherActive.count === 0) {
+        run(
+          'UPDATE agents SET status = ?, updated_at = ? WHERE id = ? AND status = ?',
+          ['standby', new Date().toISOString(), existing.assigned_agent_id, 'working']
+        );
+      }
     }
 
     // Delete or nullify related records first (foreign key constraints)

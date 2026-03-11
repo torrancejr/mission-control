@@ -4,8 +4,11 @@ import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
 import { getProjectsPath, getMissionControlUrl } from '@/lib/config';
-import type { Task, Agent, OpenClawSession } from '@/lib/types';
+import { getRelevantKnowledge, formatKnowledgeForDispatch } from '@/lib/learner';
+import { getTaskWorkflow } from '@/lib/workflow-engine';
+import type { Task, Agent, OpenClawSession, WorkflowStage, TaskImage } from '@/lib/types';
 
+export const dynamic = 'force-dynamic';
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
@@ -144,46 +147,184 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const taskProjectDir = `${projectsPath}/${projectDir}`;
     const missionControlUrl = getMissionControlUrl();
 
-    const taskMessage = `${priorityEmoji} **NEW TASK ASSIGNED**
+    // Parse planning_spec and planning_agents if present (stored as JSON text on the task row)
+    const rawTask = task as Task & { assigned_agent_name?: string; workspace_id: string; planning_spec?: string; planning_agents?: string };
+    let planningSpecSection = '';
+    let agentInstructionsSection = '';
+
+    if (rawTask.planning_spec) {
+      try {
+        const spec = JSON.parse(rawTask.planning_spec);
+        // planning_spec may be an object with spec_markdown, or a raw string
+        const specText = typeof spec === 'string' ? spec : (spec.spec_markdown || JSON.stringify(spec, null, 2));
+        planningSpecSection = `\n---\n**📋 PLANNING SPECIFICATION:**\n${specText}\n`;
+      } catch {
+        // If not valid JSON, treat as plain text
+        planningSpecSection = `\n---\n**📋 PLANNING SPECIFICATION:**\n${rawTask.planning_spec}\n`;
+      }
+    }
+
+    if (rawTask.planning_agents) {
+      try {
+        const agents = JSON.parse(rawTask.planning_agents);
+        if (Array.isArray(agents)) {
+          // Find instructions for this specific agent, or include all if none match
+          const myInstructions = agents.find(
+            (a: { agent_id?: string; name?: string; instructions?: string }) =>
+              a.agent_id === agent.id || a.name === agent.name
+          );
+          if (myInstructions?.instructions) {
+            agentInstructionsSection = `\n**🎯 YOUR INSTRUCTIONS:**\n${myInstructions.instructions}\n`;
+          } else {
+            // Include all agent instructions for context
+            const allInstructions = agents
+              .filter((a: { instructions?: string }) => a.instructions)
+              .map((a: { name?: string; role?: string; instructions?: string }) =>
+                `- **${a.name || a.role || 'Agent'}:** ${a.instructions}`
+              )
+              .join('\n');
+            if (allInstructions) {
+              agentInstructionsSection = `\n**🎯 AGENT INSTRUCTIONS:**\n${allInstructions}\n`;
+            }
+          }
+        }
+      } catch {
+        // Ignore malformed planning_agents JSON
+      }
+    }
+
+    // Inject relevant knowledge from the learner knowledge base
+    let knowledgeSection = '';
+    try {
+      const knowledge = getRelevantKnowledge(task.workspace_id, task.title);
+      knowledgeSection = formatKnowledgeForDispatch(knowledge);
+    } catch {
+      // Knowledge injection is best-effort
+    }
+
+    // Determine role-specific instructions based on workflow template
+    const workflow = getTaskWorkflow(id);
+    let currentStage: WorkflowStage | undefined;
+    let nextStage: WorkflowStage | undefined;
+    if (workflow) {
+      let stageIndex = workflow.stages.findIndex(s => s.status === task.status);
+      // 'assigned' isn't a workflow stage — resolve to the 'build' stage (in_progress)
+      if (stageIndex < 0 && (task.status === 'assigned' || task.status === 'inbox')) {
+        stageIndex = workflow.stages.findIndex(s => s.role === 'builder');
+      }
+      if (stageIndex >= 0) {
+        currentStage = workflow.stages[stageIndex];
+        nextStage = workflow.stages[stageIndex + 1];
+      }
+    }
+
+    const isBuilder = !currentStage || currentStage.role === 'builder' || task.status === 'assigned';
+    const isTester = currentStage?.role === 'tester';
+    const isVerifier = currentStage?.role === 'verifier' || currentStage?.role === 'reviewer';
+    const nextStatus = nextStage?.status || 'review';
+    const failEndpoint = `POST ${missionControlUrl}/api/tasks/${task.id}/fail`;
+
+    let completionInstructions: string;
+    if (isBuilder) {
+      completionInstructions = `**IMPORTANT:** After completing work, you MUST call these APIs:
+1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
+   Body: {"activity_type": "completed", "message": "Description of what was done"}
+2. Register deliverable: POST ${missionControlUrl}/api/tasks/${task.id}/deliverables
+   Body: {"deliverable_type": "file", "title": "File name", "path": "${taskProjectDir}/filename.html"}
+3. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+   Body: {"status": "${nextStatus}"}
+
+When complete, reply with:
+\`TASK_COMPLETE: [brief summary of what you did]\``;
+    } else if (isTester) {
+      completionInstructions = `**YOUR ROLE: TESTER** — Test the deliverables for this task.
+
+Review the output directory for deliverables and run any applicable tests.
+
+**If tests PASS:**
+1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
+   Body: {"activity_type": "completed", "message": "Tests passed: [summary]"}
+2. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+   Body: {"status": "${nextStatus}"}
+
+**If tests FAIL:**
+1. ${failEndpoint}
+   Body: {"reason": "Detailed description of what failed and what needs fixing"}
+
+Reply with: \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed]\``;
+    } else if (isVerifier) {
+      completionInstructions = `**YOUR ROLE: VERIFIER** — Verify that all work meets quality standards.
+
+Review deliverables, test results, and task requirements.
+
+**If verification PASSES:**
+1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
+   Body: {"activity_type": "completed", "message": "Verification passed: [summary]"}
+2. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+   Body: {"status": "${nextStatus}"}
+
+**If verification FAILS:**
+1. ${failEndpoint}
+   Body: {"reason": "Detailed description of what failed and what needs fixing"}
+
+Reply with: \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed]\``;
+    } else {
+      // Fallback for unknown roles
+      completionInstructions = `**IMPORTANT:** After completing work:
+1. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+   Body: {"status": "${nextStatus}"}`;
+    }
+
+    // Build image references section
+    let imagesSection = '';
+    if (task.images) {
+      try {
+        const images: TaskImage[] = JSON.parse(task.images);
+        if (images.length > 0) {
+          const imageList = images
+            .map(img => `- ${img.original_name}: ${missionControlUrl}/api/task-images/${task.id}/${img.filename}`)
+            .join('\n');
+          imagesSection = `\n**Reference Images:**\n${imageList}\n`;
+        }
+      } catch {
+        // Ignore malformed images JSON
+      }
+    }
+
+    const roleLabel = currentStage?.label || 'Task';
+    const taskMessage = `${priorityEmoji} **${isBuilder ? 'NEW TASK ASSIGNED' : `${roleLabel.toUpperCase()} STAGE — ${task.title}`}**
 
 **Title:** ${task.title}
 ${task.description ? `**Description:** ${task.description}\n` : ''}
 **Priority:** ${task.priority.toUpperCase()}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
-
-**OUTPUT DIRECTORY:** ${taskProjectDir}
-Create this directory and save all deliverables there.
-
-**IMPORTANT:** After completing work, you MUST call these APIs:
-1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
-   Body: {"activity_type": "completed", "message": "Description of what was done"}
-2. Register deliverable: POST ${missionControlUrl}/api/tasks/${task.id}/deliverables
-   Body: {"deliverable_type": "file", "title": "File name", "path": "${taskProjectDir}/filename.html"}
-3. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
-   Body: {"status": "review"}
-
-When complete, reply with:
-\`TASK_COMPLETE: [brief summary of what you did]\`
+${planningSpecSection}${agentInstructionsSection}${knowledgeSection}${imagesSection}
+${isBuilder ? `**OUTPUT DIRECTORY:** ${taskProjectDir}\nCreate this directory and save all deliverables there.\n` : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n`}
+${completionInstructions}
 
 If you need help or clarification, ask the orchestrator.`;
 
     // Send message to agent's session using chat.send
     try {
       // Use sessionKey for routing to the agent's session
-      // Format: agent:main:{openclaw_session_id}
-      const sessionKey = `agent:main:${session.openclaw_session_id}`;
+      // Format: {prefix}{openclaw_session_id} where prefix defaults to 'agent:main:'
+      const prefix = agent.session_key_prefix || 'agent:main:';
+      const sessionKey = `${prefix}${session.openclaw_session_id}`;
       await client.call('chat.send', {
         sessionKey,
         message: taskMessage,
         idempotencyKey: `dispatch-${task.id}-${Date.now()}`
       });
 
-      // Update task status to in_progress
-      run(
-        'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
-        ['in_progress', now, id]
-      );
+      // Only move to in_progress for builder dispatch (task is in 'assigned' status)
+      // For tester/reviewer/verifier, the task status is already correct
+      if (task.status === 'assigned') {
+        run(
+          'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
+          ['in_progress', now, id]
+        );
+      }
 
       // Broadcast task update
       const updatedTask = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [id]);

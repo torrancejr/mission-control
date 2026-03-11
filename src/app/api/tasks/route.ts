@@ -3,9 +3,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryAll, queryOne, run } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { CreateTaskSchema } from '@/lib/validation';
+import { populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import type { Task, CreateTaskRequest, Agent } from '@/lib/types';
 
 // GET /api/tasks - List all tasks with optional filters
+
+export const dynamic = 'force-dynamic';
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url);
@@ -96,10 +99,17 @@ export async function POST(request: NextRequest) {
 
     const workspaceId = validatedData.workspace_id || 'default';
     const status = validatedData.status || 'inbox';
-    
+
+    // Auto-assign the workspace's default workflow template
+    const defaultTemplate = queryOne<{ id: string }>(
+      'SELECT id FROM workflow_templates WHERE workspace_id = ? AND is_default = 1 LIMIT 1',
+      [workspaceId]
+    );
+    const workflowTemplateId = defaultTemplate?.id || null;
+
     run(
-      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         validatedData.title,
@@ -111,6 +121,7 @@ export async function POST(request: NextRequest) {
         workspaceId,
         validatedData.business_id || 'default',
         validatedData.due_date || null,
+        workflowTemplateId,
         now,
         now,
       ]
@@ -145,6 +156,9 @@ export async function POST(request: NextRequest) {
       [id]
     );
     
+    // Auto-populate workflow roles from workspace agents
+    populateTaskRolesFromAgents(id, workspaceId);
+
     // Broadcast task creation via SSE
     if (task) {
       broadcast({
@@ -152,7 +166,7 @@ export async function POST(request: NextRequest) {
         payload: task,
       });
     }
-    
+
     return NextResponse.json(task, { status: 201 });
   } catch (error) {
     console.error('Failed to create task:', error);

@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 
+export const dynamic = 'force-dynamic';
 /**
  * POST /api/tasks/[id]/subagent
  * Register a sub-agent session for a task
@@ -38,11 +39,11 @@ export async function POST(
     if (agent_name) {
       // Check if agent already exists
       const existingAgent = db.prepare('SELECT id FROM agents WHERE name = ?').get(agent_name) as any;
-      
+
       if (existingAgent) {
         agentId = existingAgent.id;
-      } else {
-        // Create temporary sub-agent record
+      } else if (process.env.ALLOW_DYNAMIC_AGENTS !== 'false') {
+        // Create temporary sub-agent record (skipped when ALLOW_DYNAMIC_AGENTS=false)
         agentId = crypto.randomUUID();
         db.prepare(`
           INSERT INTO agents (id, name, role, description, status)
@@ -54,6 +55,8 @@ export async function POST(
           'Automatically created sub-agent',
           'working'
         );
+      } else {
+        console.log(`[Subagent] Dynamic agent generation disabled (ALLOW_DYNAMIC_AGENTS=false), skipping creation of sub-agent "${agent_name}"`);
       }
     }
 

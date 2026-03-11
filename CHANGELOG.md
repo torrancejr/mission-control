@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-03-10
+
+### Added
+- **Task Image Attachments** — Upload reference images (UI mockups, screenshots, etc.) to tasks. Images are included in agent dispatch context so AI agents can see what they're building. New Images tab in Task Modal with grid view, upload, and delete. (fixes #60)
+
+### Fixed
+- **PORT env var** — Dev and start scripts now respect `PORT` env var instead of hardcoding 4000. Config fallback URL also uses `process.env.PORT`. (fixes #68)
+- **Webhook auth bypass** — Webhook routes (`/api/webhooks/*`) now bypass `MC_API_TOKEN` middleware, relying on their own HMAC signature validation. Fixes broken callbacks in split-service deployments. (fixes #64)
+- **Agent "Working" status** — Agents now correctly reset to standby when they have no remaining active tasks. Previously the Working tag persisted after task completion/deletion. (fixes #61)
+
+---
+
+## [1.4.1] - 2026-03-10
+
+### Added
+- **Kanban UX Improvements** — Improved horizontal scrollbar visibility and hit area. Added optional compact empty columns mode (off by default, toggleable via Settings → Kanban UX). (PR #66)
+- **Docker CI Workflow** — GitHub Actions workflow to automatically build the Dockerfile on push. (PR #69)
+- **Pipeline Documentation** — Added `docs/HOW-THE-PIPELINE-WORKS.md` explaining the full multi-agent pipeline lifecycle, stages, loop-back mechanics, and Learner knowledge injection.
+
+### Fixed
+- **Workspace Deletion** — Fixed `SQLITE_CONSTRAINT_FOREIGNKEY` error when deleting workspaces that have auto-created workflow templates or knowledge entries. Cascade deletion now properly cleans up dependent records. (PR #71, fixes #70)
+
+---
+
+## [1.4.0] - 2026-03-03
+
+### Added
+- **Multi-Agent Workflow Pipeline** — Full task lifecycle now supports staged orchestration: `planning → inbox → assigned → in_progress → testing → review → verification → done`.
+- **Core Agent Bootstrap** — New workspaces can auto-bootstrap a 4-agent core team: Builder (🛠️), Tester (🧪), Reviewer (🔍), and Learner (📚).
+- **Workflow Engine Coordination** — Added queue-aware review draining (`drainQueue()`), automatic role-based stage handoffs, and fail-loopback routing.
+- **Learner Knowledge Loop** — Learner notifications on stage transitions plus knowledge injection into future dispatch messages.
+- **New API Routes**
+  - `POST /api/tasks/[id]/fail`
+  - `GET /api/tasks/[id]/roles`
+  - `POST /api/workspaces/[id]/knowledge`
+  - `GET /api/workspaces/[id]/workflows`
+
+### Changed
+- **Strict template defaults** — Strict workflow is now default, with review as queue stage and verification owned by the `reviewer` role.
+- **Workspace initialization** — New workspaces can clone workflow templates and bootstrap core agents automatically.
+- **Project branding/docs** — Updated project branding to Autensa (formerly Mission Control) and added explicit privacy-first statement in docs.
+
+### Fixed
+- **Role mismatch** — Fixed strict template verification role (`verifier` → `reviewer`).
+- **Review queue bypass** — Fixed auto-advance behavior that could skip proper review queue flow.
+- **Dispatch status transition** — Fixed dispatch route using hardcoded `done`; now uses computed next workflow status.
+- **Assigned-status resolution** — Fixed mapping so `assigned` resolves to builder stage dispatch correctly.
+- **Task template assignment** — Fixed task creation path so default workflow template is attached automatically.
+- **Learner role assignment** — Fixed missing `task_roles` learner assignment so the learner receives transition events.
+
+### Migration
+- **Migration 013: Fresh Start** — Resets runtime task/agent/event data, sets Strict as default workflow template, and bootstraps core agents for the default workspace.
+
+---
+
+## [1.3.0] - 2026-03-02
+
+### Added
+- **Agent Activity Dashboard** — Dedicated page for monitoring agent work with mobile card layout. (#48 — thanks @pkgaiassistant-droid!)
+- **Remote Model Discovery** — Discover AI models from OpenClaw Gateway via `MODEL_DISCOVERY=true` env var. (#43 — thanks @davetha!)
+- **Proxy Troubleshooting** — Added docs for users behind HTTP proxies experiencing 502 errors on agent callbacks.
+
+### Fixed
+- **Force-Dynamic API Routes** — All API routes now use `force-dynamic` to prevent stale cached responses. (#43)
+- **Null Agent Assignment** — `assigned_agent_id` can now be null in task creation schema. (#38 — thanks @JamesCao2048!)
+- **Dispatch Spec Forwarding** — Planning spec and agent instructions now forwarded in dispatch messages. (#51)
+- **Dispatch Failure Recovery** — Tasks stuck in `pending_dispatch` auto-reset to planning status. (#52)
+
+---
+
 ## [1.2.0] - 2026-02-19
 
 ### Added
@@ -122,7 +192,7 @@ This is the first stable, tested, and working release of Mission Control.
 
 ### Technical Details
 
-- Built with Next.js 15 (App Router)
+- Built with Next.js 14 (App Router)
 - SQLite database with automatic migrations
 - Tailwind CSS for styling
 - TypeScript throughout
@@ -154,6 +224,10 @@ This is the first stable, tested, and working release of Mission Control.
 
 ---
 
+[1.4.0]: https://github.com/crshdn/mission-control/compare/v1.3.1...v1.4.0
+[1.3.1]: https://github.com/crshdn/mission-control/releases/tag/v1.3.1
+[1.3.0]: https://github.com/crshdn/mission-control/compare/v1.2.0...v1.3.0
+[1.2.0]: https://github.com/crshdn/mission-control/releases/tag/v1.2.0
 [1.1.0]: https://github.com/crshdn/mission-control/releases/tag/v1.1.0
 [1.0.1]: https://github.com/crshdn/mission-control/releases/tag/v1.0.1
 [1.0.0]: https://github.com/crshdn/mission-control/releases/tag/v1.0.0

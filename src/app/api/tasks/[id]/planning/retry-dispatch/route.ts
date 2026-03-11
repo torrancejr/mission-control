@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { queryOne, run, getDb } from '@/lib/db';
+import { queryOne, run } from '@/lib/db';
 import { triggerAutoDispatch } from '@/lib/auto-dispatch';
 
+export const dynamic = 'force-dynamic';
 /**
  * POST /api/tasks/[id]/planning/retry-dispatch
  * 
@@ -56,31 +57,24 @@ export async function POST(
       workspaceId: task.workspace_id
     });
 
-    // Use transaction to ensure atomic updates
-    const db = getDb();
-    const transaction = db.transaction(() => {
-      if (result.success) {
-        // Update task status on success
-        run(`
-          UPDATE tasks 
-          SET status = 'inbox',
-              planning_dispatch_error = NULL,
-              updated_at = datetime('now')
-          WHERE id = ?
-        `, [taskId]);
-      } else {
-        // Store the error for display, keep as 'pending_dispatch'
-        run(`
-          UPDATE tasks 
-          SET planning_dispatch_error = ?,
-              status = 'pending_dispatch',
-              updated_at = datetime('now')
-          WHERE id = ?
-        `, [result.error, taskId]);
-      }
-    });
-
-    transaction();
+    // Update task state based on dispatch result — preserve planning data either way
+    if (result.success) {
+      run(`
+        UPDATE tasks
+        SET planning_dispatch_error = NULL,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `, [taskId]);
+    } else {
+      // Keep planning data intact so user can retry again without re-planning
+      run(`
+        UPDATE tasks
+        SET planning_dispatch_error = ?,
+            status_reason = ?,
+            updated_at = datetime('now')
+        WHERE id = ?
+      `, [result.error, 'Dispatch retry failed: ' + result.error, taskId]);
+    }
 
     if (result.success) {
       return NextResponse.json({ 
@@ -96,18 +90,19 @@ export async function POST(
   } catch (error) {
     console.error('Failed to retry dispatch:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    
-    // Store the error in the database for user display
+
+    // Keep planning data intact — just record the error
     run(`
-      UPDATE tasks 
+      UPDATE tasks
       SET planning_dispatch_error = ?,
+          status_reason = ?,
           updated_at = datetime('now')
       WHERE id = ?
-    `, [`Retry error: ${errorMessage}`, taskId]);
+    `, [`Retry error: ${errorMessage}`, `Retry error: ${errorMessage}`, taskId]);
 
-    return NextResponse.json({ 
-      error: 'Failed to retry dispatch', 
-      details: errorMessage 
+    return NextResponse.json({
+      error: 'Failed to retry dispatch',
+      details: errorMessage
     }, { status: 500 });
   }
 }

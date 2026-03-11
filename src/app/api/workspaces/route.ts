@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { bootstrapCoreAgents, cloneWorkflowTemplates } from '@/lib/bootstrap-agents';
 import type { Workspace, WorkspaceStats, TaskStatus } from '@/lib/types';
+
+export const dynamic = 'force-dynamic';
 
 // Helper to generate slug from name
 function generateSlug(name: string): string {
@@ -31,12 +34,14 @@ export async function GET(request: NextRequest) {
         `).all(workspace.id) as { status: TaskStatus; count: number }[];
         
         const counts: WorkspaceStats['taskCounts'] = {
+          pending_dispatch: 0,
           planning: 0,
           inbox: 0,
           assigned: 0,
           in_progress: 0,
           testing: 0,
           review: 0,
+          verification: 0,
           done: 0,
           total: 0
         };
@@ -96,6 +101,10 @@ export async function POST(request: NextRequest) {
       INSERT INTO workspaces (id, name, slug, description, icon)
       VALUES (?, ?, ?, ?, ?)
     `).run(id, name.trim(), slug, description || null, icon || '📁');
+
+    // Clone workflow templates and bootstrap core agents for the new workspace
+    cloneWorkflowTemplates(db, id);
+    bootstrapCoreAgents(id);
 
     const workspace = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id);
     return NextResponse.json(workspace, { status: 201 });

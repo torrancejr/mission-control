@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS agents (
   model TEXT,
   source TEXT DEFAULT 'local',
   gateway_agent_id TEXT,
+  session_key_prefix TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -46,19 +47,22 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   description TEXT,
-  status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'testing', 'review', 'done')),
+  status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'testing', 'review', 'verification', 'done')),
   priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
   assigned_agent_id TEXT REFERENCES agents(id),
   created_by_agent_id TEXT REFERENCES agents(id),
   workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
   business_id TEXT DEFAULT 'default',
   due_date TEXT,
+  workflow_template_id TEXT REFERENCES workflow_templates(id),
   planning_session_key TEXT,
   planning_messages TEXT,
   planning_complete INTEGER DEFAULT 0,
   planning_spec TEXT,
   planning_agents TEXT,
   planning_dispatch_error TEXT,
+  status_reason TEXT,
+  images TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -149,6 +153,43 @@ CREATE TABLE IF NOT EXISTS openclaw_sessions (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Workflow templates (per-workspace workflow definitions)
+CREATE TABLE IF NOT EXISTS workflow_templates (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
+  name TEXT NOT NULL,
+  description TEXT,
+  stages TEXT NOT NULL,
+  fail_targets TEXT,
+  is_default INTEGER DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Task role assignments (role -> agent mapping per task)
+CREATE TABLE IF NOT EXISTS task_roles (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  created_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(task_id, role)
+);
+
+-- Knowledge entries (learner knowledge base)
+CREATE TABLE IF NOT EXISTS knowledge_entries (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
+  task_id TEXT REFERENCES tasks(id),
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tags TEXT,
+  confidence REAL DEFAULT 0.5,
+  created_by_agent_id TEXT REFERENCES agents(id),
+  created_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Task activities table (for real-time activity log)
 CREATE TABLE IF NOT EXISTS task_activities (
   id TEXT PRIMARY KEY,
@@ -183,4 +224,8 @@ CREATE INDEX IF NOT EXISTS idx_activities_task ON task_activities(task_id, creat
 CREATE INDEX IF NOT EXISTS idx_deliverables_task ON task_deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task ON openclaw_sessions(task_id);
 CREATE INDEX IF NOT EXISTS idx_planning_questions_task ON planning_questions(task_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_workflow_templates_workspace ON workflow_templates(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_task_roles_task ON task_roles(task_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entries_workspace ON knowledge_entries(workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_knowledge_entries_task ON knowledge_entries(task_id);
 `;

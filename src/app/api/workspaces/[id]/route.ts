@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+export const dynamic = 'force-dynamic';
 // GET /api/workspaces/[id] - Get a single workspace
 export async function GET(
   request: NextRequest,
@@ -103,7 +104,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'Workspace not found' }, { status: 404 });
     }
     
-    // Check if workspace has tasks or agents
+    // Check if workspace has tasks or agents (cannot delete)
     const taskCount = db.prepare(
       'SELECT COUNT(*) as count FROM tasks WHERE workspace_id = ?'
     ).get(id) as { count: number };
@@ -119,6 +120,10 @@ export async function DELETE(
         agentCount: agentCount.count
       }, { status: 400 });
     }
+    
+    // Delete associated records that don't block deletion
+    db.prepare('DELETE FROM workflow_templates WHERE workspace_id = ?').run(id);
+    db.prepare('DELETE FROM knowledge_entries WHERE workspace_id = ?').run(id);
     
     db.prepare('DELETE FROM workspaces WHERE id = ?').run(id);
     
