@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, ChevronRight, ChevronLeft, Zap, ZapOff, Loader2, Search } from 'lucide-react';
+import { Plus, ChevronRight, ChevronLeft, Zap, ZapOff, Loader2, Search, Building2 } from 'lucide-react';
+import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { useMissionControl } from '@/lib/store';
 import type { Agent, AgentStatus, OpenClawSession } from '@/lib/types';
 import { AgentModal } from './AgentModal';
@@ -14,6 +16,8 @@ interface AgentsSidebarProps {
 }
 
 export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
+  const params = useParams();
+  const workspaceSlug = params?.slug as string | undefined;
   const { agents, selectedAgent, setSelectedAgent, agentOpenClawSessions, setAgentOpenClawSession } = useMissionControl();
   const [filter, setFilter] = useState<FilterTab>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -155,6 +159,19 @@ export function AgentsSidebar({ workspaceId }: AgentsSidebarProps) {
                   <span className="text-mc-text">Active Sub-Agents:</span>
                   <span className="font-bold text-green-400">{activeSubAgents}</span>
                 </div>
+              </div>
+            )}
+
+            {/* Navigation Links */}
+            {workspaceSlug && (
+              <div className="mt-3 mb-3">
+                <Link
+                  href={`/workspace/${workspaceSlug}/office`}
+                  className="flex items-center gap-2 px-3 py-2 rounded text-sm text-mc-text-secondary hover:bg-mc-bg-tertiary hover:text-mc-text transition-colors"
+                >
+                  <Building2 className="w-4 h-4" />
+                  <span>🏢 Office</span>
+                </Link>
               </div>
             )}
 
